@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Twitch Integrity v2.3 — Debug Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://github.com/tmijs/tmi.js/releases/download/v1.8.5/tmi.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background: #0b0b0d; color: #efeff1; font-family: 'Inter', sans-serif; }
+        .glass { background: #18181b; border: 1px solid #303032; border-radius: 1rem; }
+        .twitch-btn { background: #9147ff; transition: 0.2s; }
+        .twitch-btn:hover { background: #772ce8; }
+        .twitch-btn:disabled { background: #303032; cursor: not-allowed; }
+        .log-entry { font-family: monospace; font-size: 10px; border-bottom: 1px solid #222; padding: 2px 0; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-5xl mx-auto space-y-6">
+        <div class="glass p-6 shadow-2xl">
+            <h1 class="text-xl font-black mb-4 uppercase tracking-tighter">Integrity <span class="text-purple-500">v2.3</span></h1>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="md:col-span-2">
+                    <label class="text-[10px] font-bold text-gray-500 uppercase">Никнейм</label>
+                    <input type="text" id="targetInput" placeholder="bratishkinoff" class="w-full bg-black border border-[#303032] p-3 rounded-lg focus:border-purple-500 outline-none">
+                </div>
+                <div>
+                    <label class="text-[10px] font-bold text-gray-500 uppercase">Access Token</label>
+                    <input type="password" id="tokenInput" value="yq9xsxj8dstkedlsaq76tsltg0j2rv" class="w-full bg-black border border-[#303032] p-3 rounded-lg focus:border-purple-500 outline-none">
+                </div>
+            </div>
+            
+            <button onclick="startAnalysis()" id="btnStart" class="twitch-btn w-full mt-4 py-4 rounded-xl font-bold uppercase tracking-widest">Проверить канал</button>
+            
+            <div id="loader" class="mt-4 hidden h-1 bg-[#303032] rounded-full overflow-hidden">
+                <div id="bar" class="h-full bg-purple-500 w-0 transition-all duration-300"></div>
+            </div>
+        </div>
+
+        <div id="debugBox" class="glass p-4 bg-black border-red-900/50 hidden">
+            <h3 class="text-red-500 text-xs font-bold mb-2 uppercase">Лог системы (Debug):</h3>
+            <div id="console" class="max-h-32 overflow-y-auto custom-scroll text-gray-400"></div>
+        </div>
+
+        <div id="results" class="hidden animate-in fade-in duration-500">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="glass p-6 text-center">
+                    <img id="avatar" class="w-24 h-24 rounded-full mx-auto border-4 border-black mb-4">
+                    <h2 id="nickname" class="text-2xl font-black italic"></h2>
+                    <p id="statusBadge" class="inline-block px-3 py-1 rounded text-[10px] font-bold mt-2 uppercase"></p>
+                    
+                    <div class="mt-6 text-left space-y-2">
+                        <div class="flex justify-between border-b border-[#222] pb-1">
+                            <span class="text-xs text-gray-500">Фолловеры:</span>
+                            <span id="statFollows" class="text-xs font-bold font-mono">н/д</span>
+                        </div>
+                        <div class="flex justify-between border-b border-[#222] pb-1">
+                            <span class="text-xs text-gray-500">Игра:</span>
+                            <span id="statGame" class="text-xs font-bold italic">Оффлайн</span>
+                        </div>
+                    </div>
+
+                    <div id="riskCard" class="mt-6 p-4 rounded-xl border-2 text-center">
+                        <p class="text-[10px] uppercase font-black opacity-50">Риск накрутки</p>
+                        <div id="riskPercent" class="text-4xl font-black">0%</div>
+                    </div>
+                </div>
+
+                <div class="lg:col-span-2 space-y-6">
+                    <div class="glass p-6">
+                        <h4 class="text-xs font-bold text-gray-500 uppercase mb-4">История просмотров записей (VODs)</h4>
+                        <div class="h-48"><canvas id="historyChart"></canvas></div>
+                    </div>
+                    
+                    <div class="glass p-6">
+                        <h4 class="text-xs font-bold text-gray-500 uppercase mb-4 italic">Анализ текущего чата</h4>
+                        <div id="chatInfo" class="text-center text-gray-500 text-xs py-10">
+                            Запустите проверку, когда стример будет онлайн
+                        </div>
+                        <canvas id="liveChart" class="max-h-32"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let myCharts = {};
+
+        function log(msg, type = 'info') {
+            const con = document.getElementById('console');
+            const box = document.getElementById('debugBox');
+            box.classList.remove('hidden');
+            const color = type === 'error' ? 'text-red-400' : (type === 'warn' ? 'text-yellow-400' : 'text-green-400');
+            con.innerHTML += `<div class="log-entry ${color}">[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+            con.scrollTop = con.scrollHeight;
+        }
+
+        async function twitchFetch(endpoint, token) {
+            log(`Запрос: ${endpoint}...`);
+            const res = await fetch(`https://api.twitch.tv/helix/${endpoint}`, {
+                headers: {
+                    'Client-ID': 'gp762nuuoqcoxypju8c569th9wz7q5', // Twitch Web ID
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                log(`Ошибка ${res.status}: ${errData.message || 'Неизвестно'}`, 'error');
+                throw new Error(res.status);
+            }
+            return res.json();
+        }
+
+        async function startAnalysis() {
+            const nick = document.getElementById('targetInput').value.trim().toLowerCase();
+            const token = document.getElementById('tokenInput').value.trim();
+            const btn = document.getElementById('btnStart');
+            
+            if (!nick || !token) {
+                alert("Введите ник и токен!");
+                return;
+            }
+
+            // UI Reset
+            btn.disabled = true;
+            document.getElementById('loader').classList.remove('hidden');
+            document.getElementById('results').classList.add('hidden');
+            document.getElementById('bar').style.width = "10%";
+            document.getElementById('console').innerHTML = '';
+
+            try {
+                // 1. Поиск юзера
+                const userRes = await twitchFetch(`users?login=${nick}`, token);
+                if (!userRes.data?.length) throw new Error("Юзер не найден");
+                const user = userRes.data[0];
+                
+                document.getElementById('avatar').src = user.profile_image_url;
+                document.getElementById('nickname').innerText = user.display_name;
+                document.getElementById('bar').style.width = "30%";
+
+                // 2. Сбор статистики (параллельно, чтобы не падать на одном запросе)
+                let stream = null, videos = [], follows = null;
+
+                try {
+                    const sRes = await twitchFetch(`streams?user_id=${user.id}`, token);
+                    stream = sRes.data[0];
+                } catch(e) { log("Не удалось проверить онлайн статус", "warn"); }
+
+                try {
+                    const vRes = await twitchFetch(`videos?user_id=${user.id}&first=10&type=archive`, token);
+                    videos = vRes.data || [];
+                } catch(e) { log("Не удалось загрузить историю стримов", "warn"); }
+
+                try {
+                    // ВАЖНО: Этот эндпоинт часто выдает 403 без спец. прав
+                    const fRes = await twitchFetch(`channels/followers?broadcaster_id=${user.id}`, token);
+                    follows = fRes.total;
+                    document.getElementById('statFollows').innerText = follows.toLocaleString();
+                } catch(e) { 
+                    log("Доступ к списку фолловеров ограничен Twitch (нужны права модератора)", "warn");
+                    document.getElementById('statFollows').innerText = "закрыто API";
+                }
+
+                // 3. Обработка данных
+                let score = 0;
+                
+                // Анализ истории
+                if (videos.length > 0) {
+                    renderHistoryChart(videos);
+                    // Простая проверка: если фолловеры есть, а просмотров на VOD < 1%
+                    if (follows && (videos[0].view_count / follows) < 0.01) {
+                        score += 30;
+                        log("Аномалия: Слишком низкие просмотры записей относительно фолловеров", "warn");
+                    }
+                }
+
+                // Анализ Live
+                if (stream) {
+                    document.getElementById('statusBadge').innerText = "В эфире";
+                    document.getElementById('statusBadge').className = "inline-block px-3 py-1 rounded text-[10px] font-bold mt-2 uppercase bg-red-600 animate-pulse";
+                    document.getElementById('statGame').innerText = stream.game_name;
+                    document.getElementById('chatInfo').classList.add('hidden');
+                    
+                    log("Подключение к чату для замера CPM...");
+                    const chatStats = await getChatCPM(nick);
+                    renderLiveChart(stream.viewer_count, chatStats);
+                    
+                    const engagement = (chatStats / stream.viewer_count) * 100;
+                    if (engagement < 0.5) score += 50;
+                } else {
+                    document.getElementById('statusBadge').innerText = "Оффлайн";
+                    document.getElementById('statusBadge').className = "inline-block px-3 py-1 rounded text-[10px] font-bold mt-2 uppercase bg-gray-700";
+                    log("Канал оффлайн, живой анализ пропущен.");
+                }
+
+                // Вердикт
+                updateRiskUI(score);
+                document.getElementById('results').classList.remove('hidden');
+                document.getElementById('bar').style.width = "100%";
+                log("Анализ завершен успешно!", "success");
+
+            } catch (err) {
+                log(`Критическая ошибка: ${err.message}`, "error");
+                alert("Произошла ошибка. Проверьте консоль внизу страницы.");
+            } finally {
+                btn.disabled = false;
+                setTimeout(() => document.getElementById('loader').classList.add('hidden'), 1000);
+            }
+        }
+
+        async function getChatCPM(channel) {
+            return new Promise(resolve => {
+                const client = new tmi.Client({ channels: [channel] });
+                let count = 0;
+                client.connect().catch(() => resolve(0));
+                client.on('message', () => count++);
+                setTimeout(() => {
+                    client.disconnect();
+                    resolve(count * 6); // Считаем за 10 сек и умножаем на 6
+                }, 10000);
+            });
+        }
+
+        function updateRiskUI(score) {
+            const s = Math.min(score, 100);
+            const el = document.getElementById('riskPercent');
+            const card = document.getElementById('riskCard');
+            el.innerText = s + "%";
+            if (s > 60) card.className = "mt-6 p-4 rounded-xl border-2 border-red-500 text-red-500 bg-red-500/10";
+            else if (s > 20) card.className = "mt-6 p-4 rounded-xl border-2 border-yellow-500 text-yellow-500 bg-yellow-500/10";
+            else card.className = "mt-6 p-4 rounded-xl border-2 border-green-500 text-green-500 bg-green-500/10";
+        }
+
+        function renderHistoryChart(videos) {
+            const ctx = document.getElementById('historyChart').getContext('2d');
+            if (myCharts.history) myCharts.history.destroy();
+            myCharts.history = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: videos.map(v => new Date(v.created_at).toLocaleDateString()).reverse(),
+                    datasets: [{
+                        data: videos.map(v => v.view_count).reverse(),
+                        borderColor: '#9147ff',
+                        backgroundColor: 'rgba(145, 71, 255, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { x: { ticks: { color: '#555', font: { size: 8 } } }, y: { grid: { color: '#222' } } }
+                }
+            });
+        }
+
+        function renderLiveChart(viewers, cpm) {
+            const ctx = document.getElementById('liveChart').getContext('2d');
+            if (myCharts.live) myCharts.live.destroy();
+            myCharts.live = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Зрители', 'Активность (CPM)'],
+                    datasets: [{
+                        data: [viewers, cpm * 10], // Масштабируем для наглядности
+                        backgroundColor: ['#303032', '#9147ff']
+                    }]
+                },
+                options: { 
+                    indexAxis: 'y',
+                    plugins: { legend: { display: false } },
+                    scales: { x: { display: false }, y: { ticks: { color: '#fff' } } }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
